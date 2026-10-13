@@ -20,8 +20,15 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent
 _ENTRY = _ROOT / "src" / "app.py"
 _ICON = _ROOT / "assets" / "icon.ico"
+# macOS shows a .icns for a .app bundle; a Windows .ico is not understood there, so a Mac build must
+# hand PyInstaller the .icns (regenerate with assets/gen_icns.py). Falls back to the .ico when absent.
+_ICON_ICNS = _ROOT / "assets" / "icon.icns"
 _LOGO = _ROOT / "assets" / "cc-logo.png"
 _NAME = "CyberController"
+# Reverse-DNS bundle identifier stamped into the macOS .app's Info.plist (CFBundleIdentifier). macOS
+# keys Launch Services, the Dock, and permission grants (the serial-port TCC prompt) off this, so a
+# bundle without a stable identifier is treated as a fresh, untrusted app on every rebuild.
+_MACOS_BUNDLE_ID = "com.lxvelabs.cybercontroller"
 
 
 def _require_linux_runtime() -> None:
@@ -95,8 +102,23 @@ def _assemble_command(onedir: bool, *, available=_module_available) -> list[str]
         "--name", _NAME,
     ]
 
-    if _ICON.exists():
-        cmd.extend(["--icon", str(_ICON)])
+    # Icon: a Mac build gets the .icns (the only format a .app bundle shows); every other platform
+    # gets the .ico. Each falls back to the other if its preferred file is missing, so the build never
+    # silently drops the icon.
+    is_macos = platform.system() == "Darwin"
+    icon = _ICON_ICNS if (is_macos and _ICON_ICNS.exists()) else _ICON
+    if is_macos and not _ICON_ICNS.exists() and _ICON.exists():
+        print("WARNING: assets/icon.icns is missing — run `python assets/gen_icns.py` for a proper "
+              "macOS app icon. Falling back to the .ico, which macOS renders poorly.")
+    if icon.exists():
+        cmd.extend(["--icon", str(icon)])
+
+    # macOS: stamp a stable reverse-DNS bundle identifier so Launch Services, the Dock and the
+    # serial-port permission grant treat each rebuild as the same app. PyInstaller's --windowed build
+    # already wraps the result in a double-clickable CyberController.app; this just makes it a
+    # well-formed one. (Inert on Windows/Linux — the flag is macOS-only.)
+    if is_macos:
+        cmd.extend(["--osx-bundle-identifier", _MACOS_BUNDLE_ID])
 
     # Splash screen — CRITICAL UX for the ONEFILE build only: a --onefile --windowed exe extracts ~80MB
     # to a temp dir on launch (10-20s on first run / slow disks) with NO visible feedback, so users think

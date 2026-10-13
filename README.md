@@ -207,6 +207,16 @@ chmod +x cyber-controller-v2.0.1-linux-x64
 
 Use the `linux-arm64` filename for ARM64. If startup fails, keep the terminal error with your distribution and version when reporting it. **Windows installer users:** run the new installer to upgrade; automatic installer upgrades are still in development.
 
+**macOS:** the build produces a standard double-clickable `CyberController.app` — drag it to `/Applications` and launch it from Finder or the Dock; no Terminal needed. Build it yourself from a checkout with:
+
+```bash
+pip install -e ".[full]" pyinstaller
+python assets/gen_icns.py     # one-time: generate the macOS app icon (assets/icon.icns)
+python build.py --onedir      # writes dist/CyberController.app
+```
+
+`--onedir` is recommended on macOS (a folder-backed `.app` starts instantly and re-signs cleanly). The bundle is not notarized yet, so the first launch needs **right-click → Open** (or *System Settings → Privacy & Security → Open Anyway*) to get past Gatekeeper. macOS will prompt once for permission to use the serial port when you first connect a device.
+
 ## 🔒 Security
 
 The application includes authenticated web access, CSRF protection, restricted download handling, integrity checks where profiles provide hashes, and optional access controls. Their scope and remaining limits are described in [SECURITY.md](SECURITY.md). These controls are not a blanket security certification. Please use the reporting address there for sensitive findings instead of posting them in a public issue.

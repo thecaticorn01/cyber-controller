@@ -177,3 +177,33 @@ def test_build_hands_the_assembled_command_to_pyinstaller(build_script, monkeypa
     assert build_script._build() == 0
     assert seen["onedir"] is True
     assert seen["cmd"] == ["fake-pyinstaller"]
+
+
+# ── macOS: a double-clickable, well-formed .app bundle ───────────────────────────────────────────
+
+def test_macos_build_is_a_windowed_app_with_bundle_id_and_icns(build_script, monkeypatch):
+    # PyInstaller's --windowed build wraps the result in a double-clickable CyberController.app; the
+    # bundle identifier + .icns make it a well-formed one (Launch Services / Dock / the serial-port
+    # TCC grant key off a stable identifier, and macOS shows the .icns, never a .ico).
+    cmd = assemble(build_script, monkeypatch, "Darwin")
+    assert "--windowed" in cmd
+    assert values_after(cmd, "--osx-bundle-identifier") == [build_script._MACOS_BUNDLE_ID]
+    icons = values_after(cmd, "--icon")
+    assert icons and icons[0].endswith("icon.icns"), f"macOS build must use the .icns icon, got {icons}"
+    # macOS add-data uses the POSIX ':' separator, never Windows ';'.
+    assert all(":" in item and ";" not in item for item in values_after(cmd, "--add-data"))
+
+
+def test_macos_build_omits_the_splash(build_script, monkeypatch):
+    # PyInstaller splash is Windows/Linux only; a macOS --splash would fail the build.
+    for onedir in (False, True):
+        cmd = assemble(build_script, monkeypatch, "Darwin", onedir=onedir)
+        assert "--splash" not in cmd
+
+
+def test_non_macos_build_has_no_bundle_id_and_uses_the_ico(build_script, monkeypatch):
+    for system in ("Windows", "Linux"):
+        cmd = assemble(build_script, monkeypatch, system)
+        assert "--osx-bundle-identifier" not in cmd
+        icons = values_after(cmd, "--icon")
+        assert icons and icons[0].endswith("icon.ico"), f"{system} build must use the .ico, got {icons}"
