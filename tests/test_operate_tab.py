@@ -205,6 +205,36 @@ def test_grid_builds_when_firmware_known_before_connect(qapp):
     assert not tab._tx_buttons and not tab._safe_buttons
 
 
+def test_screen_mirror_button_gated_to_supporting_firmware(qapp):
+    # The Screen Mirror button appears only for firmware that streams its display (Bruce) and is
+    # enabled only while the device is connected. Other firmware never shows it.
+    from src.models.device import Device
+
+    bruce = Device(port="COM23", firmware="bruce", connected=True)
+    tab = _tab(bruce)
+    tab.show()
+    try:
+        assert tab._btn_mirror.isVisible() and tab._btn_mirror.isEnabled()
+    finally:
+        tab.close()
+
+    marauder = Device(port="COM24", firmware="marauder", connected=True)
+    tab2 = _tab(marauder)
+    tab2.show()
+    try:
+        assert tab2._btn_mirror.isHidden()        # marauder does not mirror
+    finally:
+        tab2.close()
+
+    offline_bruce = Device(port="COM25", firmware="bruce", connected=False)
+    tab3 = _tab(offline_bruce)
+    tab3.show()
+    try:
+        assert tab3._btn_mirror.isVisible() and not tab3._btn_mirror.isEnabled()  # needs a live link
+    finally:
+        tab3.close()
+
+
 # ── defense-in-depth: _send re-checks arm state at write time ────────
 
 def test_send_blocks_offensive_verb_when_not_armed(qapp, monkeypatch):

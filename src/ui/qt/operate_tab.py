@@ -145,8 +145,19 @@ class OperateTab(QWidget):
                                   "does not re-probe; use the Devices tab to auto-detect).")
         self._fw_combo.currentIndexChanged.connect(self._on_fw_changed)
         head.addWidget(self._fw_combo)
+        head.addSpacing(12)
+        # Screen Mirror: a host-side virtual display for a firmware that streams its screen over serial
+        # (Bruce). Shown only for such firmware, enabled only while the device is connected — so a
+        # screenless board can be watched and driven from the keyboard. See src.ui.qt.mirror_window.
+        self._btn_mirror = QPushButton("Screen Mirror…")
+        self._btn_mirror.setToolTip("Open a virtual display of this device and drive it from the "
+                                    "keyboard (for firmware that mirrors its screen over serial).")
+        self._btn_mirror.clicked.connect(self._open_mirror)
+        self._btn_mirror.setVisible(False)
+        head.addWidget(self._btn_mirror)
         head.addStretch(1)
         root.addLayout(head)
+        self._mirror_win = None   # keep a reference so the opened window isn't garbage-collected
 
         # LxveNode Link strip (read-only): tier badge + link quality + most-recent failover + role/peer,
         # shown only when the active device is on a relay link. Mirrors the arm-lamp one-liner idiom; the
@@ -321,6 +332,21 @@ class OperateTab(QWidget):
             activity_log().emit_line(
                 "operate", f"[{self._active_port}] forced firmware -> {disp} "
                 "(manual override; may not match the hardware)", level="warn")
+
+    def _open_mirror(self) -> None:
+        """Open the screen-mirror window for the active device (gated to mirror-capable firmware)."""
+        dev = self._active_device()
+        if dev is None or not getattr(dev, "connected", False):
+            return
+        firmware = getattr(dev, "firmware", "") or ""
+        from src.protocols import supports_display_mirror
+        if not supports_display_mirror(firmware):
+            return
+        from src.ui.qt.mirror_window import MirrorWindow
+        win = MirrorWindow(self._dm, self._active_port, firmware=firmware, parent=self)
+        self._mirror_win = win   # hold a reference so it isn't collected while open
+        win.show()
+        win.raise_()
 
     def _active_device(self):
         port = self._active_port
@@ -633,6 +659,12 @@ class OperateTab(QWidget):
             self._arm_label.setText(text or "○ (no arm state reported)")
             css = f"color:{color or '#8b949e'};font-size:10pt;font-weight:bold;"
             self._arm_label.setStyleSheet(css)
+        # Screen-mirror button: visible only for firmware that streams its display, enabled only while
+        # the device is connected (the window needs a live serial link to start the stream).
+        from src.protocols import supports_display_mirror
+        mirror_fw = supports_display_mirror(firmware)
+        self._btn_mirror.setVisible(mirror_fw)
+        self._btn_mirror.setEnabled(mirror_fw and connected)
         # Arm box only applies to firmware that arms; hide the three dead buttons otherwise.
         arm_fw = self._active_supports_arm()
         self._arm_box.setVisible(arm_fw)

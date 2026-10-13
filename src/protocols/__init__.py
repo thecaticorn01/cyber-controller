@@ -250,6 +250,28 @@ def driver_type_for(name: str) -> str:
         return "text-cli"
 
 
+def supports_display_mirror(name: str) -> bool:
+    """Whether *name*'s firmware can stream its display for the host-side virtual display / screen
+    mirror. Gates the mirror UI so it only appears for a firmware that actually supports it (Bruce
+    today). Falls back to False for unknown firmwares."""
+    try:
+        return bool(getattr(get_protocol(name), "supports_display_mirror", False))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def mirror_commands_for(name: str) -> "tuple[str, str]":
+    """The (start, stop) serial commands that toggle *name*'s display-mirror stream. Falls back to the
+    Bruce defaults (``display start`` / ``display stop``) for unknown firmwares; only meaningful when
+    :func:`supports_display_mirror` is True."""
+    try:
+        proto = get_protocol(name)
+        return (getattr(proto, "mirror_start_cmd", "display start") or "display start",
+                getattr(proto, "mirror_stop_cmd", "display stop") or "display stop")
+    except Exception:  # noqa: BLE001
+        return ("display start", "display stop")
+
+
 def line_ending_for(name: str) -> str:
     """The per-firmware serial command terminator (LF by default, CR for Flipper). Programmatic send paths
     (AutoRouter, Broadcast, execute_action) must stamp this on the connection before writing, because the
@@ -339,4 +361,6 @@ __all__ = [
     "capabilities_for",
     "driver_type_for",
     "line_ending_for",
+    "supports_display_mirror",
+    "mirror_commands_for",
 ]

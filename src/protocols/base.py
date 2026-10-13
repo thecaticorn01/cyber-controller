@@ -89,6 +89,16 @@ class BaseProtocol(ABC):
     # Subclasses override; the default "text-cli" fits every line-shell firmware.
     driver_type: str = "text-cli"
 
+    # Screen-mirroring: whether this firmware can stream its display over serial for a host-side virtual
+    # display, and the serial commands that start/stop that stream. Only Bruce implements it today
+    # (``display start`` / ``display stop`` — a binary draw-op stream decoded by src.core.bruce_mirror).
+    # A firmware that leaves ``supports_display_mirror`` False exposes no mirror UI; a firmware that sets
+    # it True must stream the Bruce tftLogger packet format. Input goes back as ordinary serial commands
+    # (Bruce: ``nav <dir>``), so no extra transport is needed. Subclasses override.
+    supports_display_mirror: bool = False
+    mirror_start_cmd: str = "display start"
+    mirror_stop_cmd: str = "display stop"
+
     # Whether this firmware implements a two-factor ARM handshake (an `arm`/token/`disarm` exchange that
     # emits an ``arm_state``). Only firmwares that actually arm should have their offensive-TX verbs
     # gated behind the armed lockout in the Operate console; firmwares with no arm concept

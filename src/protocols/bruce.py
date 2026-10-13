@@ -49,6 +49,13 @@ class BruceProtocol(BaseProtocol):
 
     capabilities = frozenset({"badusb", "ble", "ir", "nfc", "rfid", "subghz", "wifi"})
 
+    # Bruce streams its TFT over serial (`display start` -> an async binary draw-op stream decoded by
+    # src.core.bruce_mirror; `display stop` ends it), and takes navigation back as `nav <dir>`. This is
+    # what powers the host-side virtual display / screen-mirror window for a Bruce device with no screen.
+    supports_display_mirror = True
+    mirror_start_cmd = "display start"
+    mirror_stop_cmd = "display stop"
+
     # ── Parsing ──────────────────────────────────────────────────────
 
     def parse_line(self, line: str) -> ParsedEvent | None:

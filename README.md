@@ -184,6 +184,10 @@ Two modes, one reformed single-window UI underneath — the same dashboard wheth
 
 Launch with no `--ui` for a picker. A **Simple / Pro** depth toggle (Ctrl+M) trims or reveals controls with zero feature penalty. Which mode suits which machine → [`docs/RECOMMENDED-SPECS.md`](docs/RECOMMENDED-SPECS.md).
 
+### Screen Mirror (virtual display)
+
+For firmware that streams its screen over serial — **Bruce** today — the Operate tab shows a **Screen Mirror…** button for a connected device. It opens a live virtual display: the device's drawing is replayed on your computer, and the arrow keys / Enter / Esc / PageUp / PageDown drive the on-device UI over serial (Bruce `nav` commands). This lets you watch and control a screenless board (e.g. a bare ESP32-S3 dev board running Bruce) with just your keyboard — no physical TFT or touch panel needed. The button only appears for firmware that supports mirroring; other firmware is unaffected.
+
 ## 🚀 Quick start
 
 ```bash
