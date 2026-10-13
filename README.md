@@ -217,9 +217,10 @@ Use the `linux-arm64` filename for ARM64. If startup fails, keep the terminal er
 
 ```bash
 pip install -e ".[full]" pyinstaller
-python assets/gen_icns.py     # one-time: generate the macOS app icon (assets/icon.icns)
 python build.py --onedir      # writes dist/CyberController.app
 ```
+
+The app icon (`assets/icon.icns`) ships in the repo, so there's nothing else to generate. (If you ever change the source art, regenerate it with `pip install pillow && python assets/gen_icns.py` — that's the only thing that needs Pillow, and the build doesn't.)
 
 `--onedir` is recommended on macOS (a folder-backed `.app` starts instantly and re-signs cleanly). The bundle is not notarized yet, so the first launch needs **right-click → Open** (or *System Settings → Privacy & Security → Open Anyway*) to get past Gatekeeper. macOS will prompt once for permission to use the serial port when you first connect a device.
 

@@ -14,9 +14,17 @@ Run:  python assets/gen_icns.py        # writes assets/icon.icns
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
-from PIL import Image
+try:
+    from PIL import Image
+except ModuleNotFoundError:
+    sys.exit(
+        "Pillow is required only to (re)generate the macOS icon, and it is not a project dependency.\n"
+        "The prebuilt assets/icon.icns already ships in the repo, so a normal build does NOT need this\n"
+        "script. If you actually changed the source art, install Pillow first:  pip install pillow"
+    )
 
 _ASSETS = Path(__file__).resolve().parent
 _SRC = _ASSETS / "icon.ico"
