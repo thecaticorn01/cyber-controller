@@ -2115,6 +2115,60 @@ def create_app(
         ]
         return jsonify({"port": port, "firmware": firmware, "groups": groups})
 
+    @app.route("/api/firmwares")
+    @requires_auth
+    def api_firmwares():
+        """The selectable firmware list for the OPERATE manual-override picker (internal name +
+        display label), so an operator can force a firmware when auto-detect can't reach the board
+        (e.g. a board still booting when the probe ran). Read-only."""
+        from src.protocols import PROTOCOL_DISPLAY_NAMES
+        items = [{"name": name, "label": disp} for name, disp in PROTOCOL_DISPLAY_NAMES.items()
+                 if name not in ("generic", "raw")]
+        return jsonify({"firmwares": items})
+
+    @app.route("/api/firmware", methods=["POST"])
+    @requires_auth
+    @requires_csrf
+    def api_set_firmware():
+        """Manually force (or clear) a connected device's firmware — the web counterpart of the Qt
+        Operate 'Firmware' override. Needed because auto-detection can miss a board that resets when
+        the port opens and is still booting during the probe (seen on macOS). Setting it forced means
+        a later auto-probe won't clobber the operator's choice; an empty value clears the force and
+        re-opens the device to auto-detection. Returns the resulting firmware + its one-tap commands."""
+        from src.core.quick_commands import canonical_grouped_quick_commands
+        from src.protocols import resolve_protocol_name
+
+        data = _json_body()
+        port = str(data.get("port", ""))
+        firmware = str(data.get("firmware", "")).strip()
+        if not port:
+            return jsonify({"error": "port is required"}), 400
+        if device_manager.get_device(port) is None:
+            return jsonify({"error": f"Unknown/unregistered port: {port}"}), 400
+        if firmware:
+            resolved = resolve_protocol_name(firmware)
+            if resolved is None:
+                return jsonify({"error": f"Unknown firmware: {firmware}"}), 400
+            device_manager.set_firmware(port, resolved, forced=True)
+            firmware = resolved
+        else:
+            # Clear the force and re-open to auto-detection (keeps whatever was last detected, unforced).
+            dev = device_manager.get_device(port)
+            device_manager.set_firmware(port, getattr(dev, "firmware", "") or "", forced=False)
+            firmware = getattr(device_manager.get_device(port), "firmware", "") or ""
+        _audit("device_set_firmware", user=session.get("user"), port=port)
+        groups = [
+            {
+                "category": group,
+                "commands": [
+                    {"command": c.command, "label": c.label, "danger": c.danger, "native": c.category}
+                    for c in cmds
+                ],
+            }
+            for group, cmds in canonical_grouped_quick_commands(firmware or "")
+        ]
+        return jsonify({"port": port, "firmware": firmware, "groups": groups})
+
     @app.route("/devices")
     @requires_auth
     def devices_page():
@@ -2329,6 +2383,57 @@ def create_app(
     _gps_connections: dict[int, Any] = {}
     _gps_connections_lock = threading.Lock()
 
+    # Live firmware auto-detection. The one-shot connect probe can miss a board that is still booting:
+    # on macOS the USB-serial driver tends to pulse DTR when the port opens (despite our deassert), so
+    # an ESP32 resets on connect and is mid-boot when the probe times out — then the web path, unlike the
+    # Qt device tab, never looked again, leaving the board "no firmware detected" for the whole session.
+    # This watches each web connection's output and sets the firmware the first time the device's own
+    # text identifies it (its boot banner, a `help` header, or any command's status line, e.g. GhostESP's
+    # "[Ghost] …"), but ONLY while the firmware is still unknown and not user-forced, so it never fights a
+    # real probe or a manual override. It feeds the same handshake.detect_firmware the probe uses.
+    from collections import deque as _deque
+
+    from src.core import handshake as _handshake_mod
+
+    _fw_detect_buffers: "dict[str, Any]" = {}
+    _fw_detect_cbs: "dict[int, tuple[Any, Any]]" = {}
+    _fw_detect_lock = threading.Lock()
+
+    def _make_fw_detect_cb(port: str):
+        def _detect(line: str) -> None:
+            try:
+                dev = device_manager.get_device(port)
+                if dev is None or getattr(dev, "firmware_forced", False):
+                    return
+                if getattr(dev, "firmware", ""):
+                    return  # already identified — nothing to do
+                with _fw_detect_lock:
+                    buf = _fw_detect_buffers.setdefault(port, _deque(maxlen=40))
+                    buf.append(line)
+                    recent = list(buf)
+                name = _handshake_mod.detect_firmware(recent)
+                if name:
+                    # forced=False: a later explicit probe or a user override still wins over this guess.
+                    device_manager.set_firmware(port, name)
+            except Exception:  # noqa: BLE001 — detection must never break serial ingestion
+                log.debug("web live firmware detect failed on %s", port, exc_info=True)
+        return callbacks.guard(_detect)
+
+    def _attach_fw_detect(port: str, conn) -> None:
+        if conn is None or not hasattr(conn, "on_line"):
+            return
+        cb = _make_fw_detect_cb(port)
+        with _fw_detect_lock:
+            prior = _fw_detect_cbs.pop(id(conn), None)
+            if prior is not None:
+                try:
+                    conn.remove_line_callback(prior[1])
+                except Exception:  # noqa: BLE001
+                    pass
+            _fw_detect_cbs[id(conn)] = (conn, cb)
+            _fw_detect_buffers.pop(port, None)
+        conn.on_line(cb)
+
     @app.route("/api/gps")
     @requires_auth
     def api_gps():
@@ -2376,6 +2481,9 @@ def create_app(
                 _gps_connections[id(conn)] = conn
                 conn.remove_line_callback(_gps_line_cb)  # remove only this app's registration
                 conn.on_line(_gps_line_cb)
+        # Watch the live stream for the firmware's own identifying text, so a board that was still
+        # booting during the probe (reset-on-open, common on macOS) is still identified once it speaks.
+        _attach_fw_detect(port, conn)
         # Run the connect-time handshake probe so the firmware is actually DETECTED on the web path (the Qt
         # device tab does this; without it a board flashed with, say, Marauder shows "no firmware" in the web
         # UI because dev.firmware was never populated). Best-effort: a probe write can fail on a quiet board.
@@ -2384,6 +2492,14 @@ def create_app(
             device_manager.probe(port)
             dev = device_manager.get_device(port)
             firmware = getattr(dev, "firmware", "") if dev else ""
+            # A board that resets when the port opens (macOS DTR pulse) is mid-boot during the first
+            # probe and answers nothing; by now it has usually finished booting, so probe once more
+            # before giving up. The live detector above is the backstop if it is still not ready.
+            if not firmware:
+                time.sleep(1.5)
+                device_manager.probe(port)
+                dev = device_manager.get_device(port)
+                firmware = getattr(dev, "firmware", "") if dev else ""
         except Exception:  # noqa: BLE001 — detection is best-effort; a connect must still succeed without it
             log.debug("web connect probe failed on %s", port, exc_info=True)
         _audit("device_connect", user=session.get("user"), port=port)
@@ -2492,6 +2608,17 @@ def create_app(
             return jsonify({"error": "port is required"}), 400
         if not _known_port(port):
             return jsonify({"error": f"Unknown/unregistered port: {port}"}), 400
+        # Detach the live firmware detector before the connection goes away, so its callback and
+        # buffer don't outlive the port.
+        conn = device_manager.get_connection(port)
+        with _fw_detect_lock:
+            _fw_detect_buffers.pop(port, None)
+            prior = _fw_detect_cbs.pop(id(conn), None) if conn is not None else None
+        if prior is not None:
+            try:
+                prior[0].remove_line_callback(prior[1])
+            except Exception:  # noqa: BLE001
+                pass
         device_manager.close_connection(port, owner="web")
         _audit("device_disconnect", user=session.get("user"), port=port)
         return jsonify({"status": "disconnected", "port": port})

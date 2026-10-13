@@ -1201,9 +1201,39 @@
     var termEl = document.getElementById("op-term");
     var statusEl = document.getElementById("op-status");
     var fwEl = document.getElementById("op-fw");
+    var fwOverride = document.getElementById("op-fw-override");
     var input = document.getElementById("op-input");
     var sendBtn = document.getElementById("op-send");
     if (!sel || !grid) return;
+
+    // Populate the manual firmware-override picker once. It's the escape hatch when auto-detect can't
+    // reach the board (e.g. it reset-and-booted as the port opened, so the connect probe saw nothing).
+    if (fwOverride && !fwOverride.dataset.loaded) {
+      fwOverride.dataset.loaded = "1";
+      getJSON("/api/firmwares").then(function (data) {
+        (data.firmwares || []).forEach(function (f) {
+          var o = document.createElement("option");
+          o.value = f.name; o.textContent = f.label;
+          fwOverride.appendChild(o);
+        });
+      }).catch(function () {});
+    }
+    // Forcing a firmware sets it on the device and loads that command set immediately.
+    if (fwOverride) fwOverride.addEventListener("change", function () {
+      if (!sel.value) return;
+      var generation = ++commandGeneration;
+      grid.innerHTML = '<div class="dim" style="font-size:12px">Loading commands…</div>';
+      postJSON("/api/firmware", { port: sel.value, firmware: fwOverride.value }).then(function (data) {
+        if (generation !== commandGeneration || sel.value !== data.port) return;
+        if (fwEl) fwEl.textContent = data.firmware || "device";
+        renderCmdGrid(data.groups, sel.value, grid, termEl, statusEl);
+        if (statusEl) statusEl.textContent = fwOverride.value
+          ? "firmware forced: " + (data.firmware || fwOverride.value)
+          : "firmware override cleared (auto-detect)";
+      }).catch(function (err) {
+        if (statusEl) statusEl.textContent = "could not set firmware: " + err;
+      });
+    });
 
     var localDraft = null, draftBlocked = false;
     var draftEl = document.getElementById("op-target-draft");
@@ -1233,16 +1263,37 @@
       bindTerminal(port, termEl, "[Activity — " + port + "]");
       getJSON("/api/quick-commands?port=" + encodeURIComponent(port)).then(function (data) {
         if (generation !== commandGeneration || sel.value !== port) return;
-        if (fwEl) fwEl.textContent = data.firmware || "device";
+        if (fwEl) fwEl.textContent = data.firmware || "detecting…";
         renderCmdGrid(data.groups, port, grid, termEl, statusEl);
+        // If the firmware isn't known yet (a board still booting when it connected), the server's live
+        // detector may identify it shortly — poll a few times so the grid fills in without a reconnect.
+        if (!data.firmware) scheduleFwRepoll(port, generation, 10);
       }).catch(function () {
         if (generation !== commandGeneration || sel.value !== port) return;
         grid.innerHTML = '<div class="er" style="font-size:12px">Could not load commands.</div>';
       });
     }
+    function scheduleFwRepoll(port, generation, triesLeft) {
+      if (triesLeft <= 0) return;
+      setTimeout(function () {
+        if (generation !== commandGeneration || sel.value !== port) return;
+        getJSON("/api/quick-commands?port=" + encodeURIComponent(port)).then(function (data) {
+          if (generation !== commandGeneration || sel.value !== port) return;
+          if (data.firmware) {
+            if (fwEl) fwEl.textContent = data.firmware;
+            renderCmdGrid(data.groups, port, grid, termEl, statusEl);
+            if (statusEl) statusEl.textContent = "detected firmware: " + data.firmware;
+          } else {
+            scheduleFwRepoll(port, generation, triesLeft - 1);
+          }
+        }).catch(function () { scheduleFwRepoll(port, generation, triesLeft - 1); });
+      }, 1500);
+    }
     sel.addEventListener("change", function () {
       // A manual choice is explicit; it never transfers an existing draft to that port.
-      localDraft = null; draftBlocked = false; if (sendBtn) sendBtn.disabled = false; showDraft(); loadFor(sel.value);
+      localDraft = null; draftBlocked = false; if (sendBtn) sendBtn.disabled = false;
+      if (fwOverride) fwOverride.value = "";   // a new device starts on Auto-detect
+      showDraft(); loadFor(sel.value);
     });
     if (sendBtn) sendBtn.addEventListener("click", function () {
       var cmd = (input.value || "").trim();
