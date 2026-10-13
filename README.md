@@ -188,6 +188,8 @@ Launch with no `--ui` for a picker. A **Simple / Pro** depth toggle (Ctrl+M) tri
 
 For firmware that streams its screen over serial — **Bruce** today — the Operate tab shows a **Screen Mirror…** button for a connected device. It opens a live virtual display: the device's drawing is replayed on your computer, and the arrow keys / Enter / Esc / PageUp / PageDown drive the on-device UI over serial (Bruce `nav` commands). This lets you watch and control a screenless board (e.g. a bare ESP32-S3 dev board running Bruce) with just your keyboard — no physical TFT or touch panel needed. The button only appears for firmware that supports mirroring; other firmware is unaffected.
 
+Stock Bruce draws its tool icons (WiFi, Bluetooth, RF, …) with vector primitives, so they render as the real recognizable symbols. The only thing that can't be shown is a **file-based image** — a custom theme icon pack or an app wallpaper — because the serial stream sends those as a file reference, not pixels, and Bruce has no serial command to read the file bytes back (the official Bruce app shows a placeholder for the same reason). Those appear as a small labelled box; everything else mirrors faithfully.
+
 ## 🚀 Quick start
 
 ```bash

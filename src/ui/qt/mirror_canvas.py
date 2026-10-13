@@ -127,11 +127,21 @@ def paint_op(painter: QPainter, op: bm.DrawOp) -> None:
         painter.drawPoint(x, y)
         return
     if fn == bm.DRAWARC and len(f) >= 8:
-        x, y, r, _ir, start, end, fg, _bg = f[:8]
-        painter.setPen(QPen(qcolor_from565(fg)))
-        # Qt angles are in 1/16 degree, measured CCW from 3 o'clock; Bruce angles are degrees.
-        span = (end - start) % 360 or 360
-        painter.drawArc(x - r, y - r, 2 * r, 2 * r, int(start) * 16, int(span) * 16)
+        x, y, r, ir, start, end, fg, _bg = f[:8]
+        # TFT_eSPI drawArc(x, y, r, ir, start, end, ...) fills the RING between inner radius ir and
+        # outer radius r, with angle 0 at 6 o'clock increasing CLOCKWISE. Qt's drawArc strokes a thin
+        # ellipse arc with angle 0 at 3 o'clock increasing COUNTER-clockwise, in 1/16°. So stroke a
+        # path at the mid radius with a pen as wide as the ring (recognisable Wi-Fi / RF signal bands,
+        # not hairlines), and convert the angles: q = 270 - tft_angle (mod 360).
+        rmid = (r + ir) / 2.0 if 0 <= ir < r else r
+        width = max(1, r - ir)
+        pen = QPen(qcolor_from565(fg))
+        pen.setWidth(int(width))
+        painter.setPen(pen)
+        q_start = int((270 - end) % 360)
+        q_span = int((end - start) % 360) or 360
+        painter.drawArc(int(x - rmid), int(y - rmid), int(2 * rmid), int(2 * rmid),
+                        q_start * 16, q_span * 16)
         return
 
     # ── text ──
@@ -152,7 +162,10 @@ def paint_op(painter: QPainter, op: bm.DrawOp) -> None:
                              Qt.AlignLeft | Qt.AlignTop, op.text)
         return
 
-    # ── image: the host does not have the device's file, so draw a labelled placeholder ──
+    # ── image: a file on the device's own SD/flash the host doesn't have, so draw a labelled
+    # placeholder (same as the official Bruce app). This is ONLY hit for file-based images — a
+    # custom THEME icon pack or an app wallpaper. Stock Bruce draws its tool icons (WiFi/BLE/RF/…)
+    # with the vector primitives above, so those render for real; only themed image icons fall here.
     if fn == bm.DRAWIMAGE and len(f) >= 2:
         x, y = f[0], f[1]
         box = QRect(x, y, 48, 48)

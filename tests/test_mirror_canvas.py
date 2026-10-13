@@ -65,6 +65,34 @@ def test_draw_fast_hline_paints_a_row(qapp):
     assert _rgb(img, 10, 9) == (0, 0, 0)
 
 
+def test_drawarc_orientation_and_thickness(qapp):
+    # Bruce draws its tool icons (WiFi/RF/LoRa signal waves) with tft.drawArc, angle 0 at 6 o'clock
+    # increasing clockwise, filling the ring between inner/outer radius. An upward-fanning arc
+    # (TFT angles 130..230, centered on top) must paint ABOVE the center, not below, and be a band
+    # (not a hairline). Regression for the arc angle/thickness conversion.
+    from src.ui.qt.mirror_canvas import MirrorCanvas
+
+    cv = MirrorCanvas()
+    cv.reset_screen(80, 80, 0)
+    cv.apply(bm.DrawOp(bm.FILLSCREEN, (0x0000,)))
+    cx = cy = 40
+    r, ir = 24, 18
+    cv.apply(bm.DrawOp(bm.DRAWARC, (cx, cy, r, ir, 130, 230, 0x07E0, 0x0000)))  # green upward arc
+    img = cv.image()
+
+    def lit(x, y):
+        c = img.pixelColor(x, y)
+        return (c.red(), c.green(), c.blue()) != (0, 0, 0)
+
+    # The band sits above the center (y smaller), within the ring radii.
+    assert any(lit(cx, cy - rr) for rr in range(ir, r + 1)), "arc should paint above the center"
+    # ...and NOT below it (the fan opens upward only).
+    assert not any(lit(cx, cy + rr) for rr in range(ir, r + 1)), "arc must not paint below the center"
+    # The band has thickness (more than a single-pixel hairline across the ring).
+    lit_count = sum(1 for rr in range(1, r + 2) if lit(cx, cy - rr))
+    assert lit_count >= 3, f"arc should be a band, not a hairline (lit rows={lit_count})"
+
+
 def test_key_press_reports_neutral_name(qapp):
     from src.ui.qt.mirror_canvas import MirrorCanvas
 
