@@ -217,6 +217,52 @@ def test_reader_loop_reconstructs_split_utf8() -> None:
     assert got == ["✓ ok"]
 
 
+def test_reader_loop_strips_ansi_line_edit_noise() -> None:
+    # An ESP32 line-editing console (ESP-IDF linenoise, etc.) redraws the prompt + echoed command on
+    # Enter using VT100 escapes, and emits color codes around output — the first lines of a command's
+    # reply arrive wrapped in escape bytes that render as "random" glyphs in a plain terminal. The
+    # reader must strip that control noise before emitting, while leaving the real text (and any valid
+    # printable Unicode) intact. Regression for the cross-platform Serial Console garbage report.
+    conn = SerialConnection("X")
+    got: list[str] = []
+    done = threading.Event()
+
+    def cb(ln):
+        got.append(ln)
+        if len(got) >= 2:
+            done.set()
+
+    conn.on_line(cb)
+    # chunk 1: a linenoise prompt redraw (cursor-to-col-1 + erase-to-EOL) around the echoed command.
+    # chunk 2: a BEL + SGR-colored result line, then a bare SGR-reset line that is pure noise (dropped).
+    conn._serial = _ScriptedSerial([
+        b"\x1b[1G\x1b[0Kmarauder> scanall\n",
+        b"\x07\x1b[32mAP: HomeNet \xe2\x9c\x93\x1b[0m\n\x1b[0m\n",
+    ])
+    th = _run_reader(conn)
+    assert done.wait(2.0), f"sanitized lines not emitted: {got}"
+    conn._stop_event.set()
+    th.join(timeout=2.0)
+    assert got[:2] == ["marauder> scanall", "AP: HomeNet ✓"]  # escapes/BEL gone, text + ✓ kept
+    assert "" not in got  # the lone SGR-reset line collapsed to empty and was dropped, not emitted
+
+
+def test_reader_loop_drops_undecodable_byte_noise() -> None:
+    # A single byte that is not valid UTF-8 decodes to U+FFFD (the replacement char) — itself just an
+    # undisplayable "random" glyph. The reader strips it so the console shows the clean surrounding
+    # text rather than boxes interspersed through the line.
+    conn = SerialConnection("X")
+    got: list[str] = []
+    done = threading.Event()
+    conn.on_line(lambda ln: (got.append(ln), done.set()))
+    conn._serial = _ScriptedSerial([b"Scan\xff\xfe results\n"])  # 0xff/0xfe are invalid UTF-8
+    th = _run_reader(conn)
+    assert done.wait(2.0), "no line emitted"
+    conn._stop_event.set()
+    th.join(timeout=2.0)
+    assert got == ["Scan results"]
+
+
 def test_reader_loop_frames_cr_only_lines() -> None:
     # A CR-only firmware (Flipper: line_ending="\r") terminates lines with "\r", never "\n". Splitting on
     # "\n" alone would frame NOTHING and buf would grow unbounded; the reader must frame on \r too.

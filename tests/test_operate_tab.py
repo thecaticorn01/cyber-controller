@@ -184,6 +184,27 @@ def test_poll_skips_firmware_without_a_status_verb(qapp):
     assert "status" not in conn.writes
 
 
+def test_grid_builds_when_firmware_known_before_connect(qapp):
+    # macOS CDC-ACM ordering: the firmware is learned (from the USB VID/PID) BEFORE the serial link
+    # reports connected. The grid must still build once the link comes up. Regression: the rebuild
+    # gate keyed on firmware ALONE, so the pre-connect "no device connected" placeholder cached the
+    # firmware and the real grid never built — firmware detected, but no commands under Operate.
+    from src.models.device import Device
+
+    dev = Device(port="/dev/cu.usbserial-10", firmware="marauder", connected=False)
+    conn = _FakeConn()
+    tab = _tab(dev, conn)   # first refresh runs while firmware is known but NOT yet connected
+    assert not tab._tx_buttons and not tab._safe_buttons   # placeholder only, no catalog yet
+
+    dev.connected = True    # the serial link establishes AFTER the firmware was already known
+    tab._refresh()
+    assert tab._safe_buttons, "the command grid must build once the device reports connected"
+
+    dev.connected = False   # and it must revert to the placeholder when the link drops
+    tab._refresh()
+    assert not tab._tx_buttons and not tab._safe_buttons
+
+
 # ── defense-in-depth: _send re-checks arm state at write time ────────
 
 def test_send_blocks_offensive_verb_when_not_armed(qapp, monkeypatch):

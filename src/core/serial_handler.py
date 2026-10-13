@@ -28,6 +28,40 @@ _MAX_LINE_CHARS = 64 * 1024
 _MAX_PENDING_STATE_NOTIFICATIONS = 64
 _NO_WRITE_RESULT = object()
 
+# ── terminal control-noise sanitizer ──────────────────────────────────────────────────────────────
+# Many ESP32 firmwares drive their serial CLI through a line-editing console (ESP-IDF's linenoise and
+# the like). On every Enter it REDRAWS the prompt + echoed command using VT100/ANSI control sequences
+# (cursor moves, "erase to end of line", the BEL), so the first line (or first few) of a command's
+# output arrives wrapped in escape bytes. Rendered in a plain text widget those bytes show as stray
+# boxes / "random" glyphs interspersed with the real text — the Serial Console garbage that reproduces
+# across firmwares and baud rates (it is a control-sequence artefact, not a baud mismatch). Separately,
+# any single byte that is not valid UTF-8 decodes to U+FFFD (the replacement char), which is itself just
+# more undisplayable noise. We strip BOTH here, before a decoded line reaches the terminal or a parser,
+# so the console shows the clean text a real terminal emulator would have rendered. Printable Unicode
+# (accented letters, box-drawing, ✓, emoji) is byte-for-byte preserved — only control noise is removed.
+_ANSI_ESCAPE_RE = re.compile(
+    r"\x1b\[[0-9;?]*[ -/]*[@-~]"           # CSI: ESC [ <params> <intermediates> <final 0x40-0x7E>
+    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC: ESC ] <text> (terminated by BEL or ST)
+    r"|\x1b[@-Z\\-_]"                       # 2-byte Fe escapes: ESC + a single 0x40-0x5F byte
+    r"|\x1b[ -/]*[0-~]"                     # other ESC-introduced forms (charset select, etc.)
+)
+# Leftover non-printable noise after escape removal: C0 controls except TAB (CR/LF are already framed
+# off), DEL, the C1 range, and U+FFFD. These carry no display meaning in a text console.
+_CTRL_NOISE_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f�]")
+
+
+def _sanitize_terminal_text(text: str) -> str:
+    """Return *text* with terminal control noise removed, leaving real printable characters intact.
+
+    Strips ANSI/VT100 escape sequences first (so a sequence's printable tail like ``[0K`` can't be
+    left behind), then any remaining control / replacement characters. A line that was pure control
+    noise collapses to ``""`` (the reader loop drops empties, as it already does for framed blanks).
+    """
+    if not text:
+        return text
+    cleaned = _ANSI_ESCAPE_RE.sub("", text)
+    return _CTRL_NOISE_RE.sub("", cleaned)
+
 
 class ConnectionState(Enum):
     """Serial connection lifecycle states."""
@@ -2284,7 +2318,11 @@ class SerialConnection:
                 if "\n" in buf or "\r" in buf:
                     parts = re.split(r"[\r\n]+", buf)
                     buf = parts.pop()
-                    for line in parts:
+                    for raw_line in parts:
+                        # Drop terminal control noise (ANSI line-edit escapes, stray C0/C1, U+FFFD)
+                        # so the console shows clean text; an all-noise line collapses to "" and is
+                        # skipped by the same empty-line guard framed blanks already use.
+                        line = _sanitize_terminal_text(raw_line)
                         if line:
                             self._emit_line(line)
                             if not self._reader_incarnation_is_current(
@@ -2295,7 +2333,9 @@ class SerialConnection:
                 # Cap the un-terminated tail: a device streaming without any CR/LF would grow `buf`
                 # forever. Once it exceeds the cap, flush it as a line and reset so memory is bounded.
                 if len(buf) > _MAX_LINE_CHARS:
-                    self._emit_line(buf)
+                    flushed = _sanitize_terminal_text(buf)
+                    if flushed:
+                        self._emit_line(flushed)
                     if not self._reader_incarnation_is_current(
                         serial_handle,
                         incarnation,

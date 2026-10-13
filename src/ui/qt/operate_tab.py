@@ -74,6 +74,13 @@ class OperateTab(QWidget):
         self._dms_seen = dms_seen if dms_seen is not None else set()
         self._active_port: str = ""
         self._grid_fw: str = ""        # firmware the grid was built for (skip rebuilds)
+        # Connection state the grid was built for. The grid early-returns a "no device connected"
+        # placeholder when the device isn't connected yet, so the rebuild gate must also fire when
+        # the device transitions connected<->disconnected — not only on a firmware change. Without
+        # this, a platform that learns the firmware (from the USB VID/PID) BEFORE the serial link
+        # reports connected (macOS CDC-ACM ordering) builds the placeholder once, caches the
+        # firmware, and never rebuilds the real grid: firmware is detected but no commands appear.
+        self._grid_connected: bool = False
         self._tx_buttons: list = []    # offensive-TX buttons (danger != "") — on only when ARMED
         self._safe_buttons: list = []  # non-TX buttons — enabled whenever the device is connected
         self._stream_buttons: list = []  # high-bandwidth STREAM verbs (ci.stream) — off on a LoRa relay link
@@ -358,6 +365,7 @@ class OperateTab(QWidget):
         # No connected device yet — explain how to get here instead of a firmware-less "no catalog" message
         # (which reads as an error).
         dev = self._active_device()
+        self._grid_connected = bool(dev is not None and getattr(dev, "connected", False))
         if dev is None or not getattr(dev, "connected", False):
             hint = QLabel("No device connected — connect one on the Devices tab, then pick it above to "
                           "control it here.")
@@ -592,9 +600,13 @@ class OperateTab(QWidget):
         """Repaint header + lamp + button-enable from the shared Device. Read-only, no writes."""
         dev = self._active_device()
         connected = bool(dev is not None and getattr(dev, "connected", False))
-        # Grid: rebuild only when the active firmware changed (buttons are otherwise stable).
+        # Grid: rebuild when the active firmware OR the connected-state changed. The connected-state
+        # is part of the gate because _rebuild_grid renders a "no device connected" placeholder (and
+        # caches the firmware) when the device isn't connected yet; without re-gating on connect, a
+        # device whose firmware is known before its link reports connected (macOS CDC ordering) would
+        # keep that placeholder forever. Buttons are otherwise stable, so this stays a no-op poll.
         firmware = (getattr(dev, "firmware", "") if dev is not None else "") or ""
-        if firmware != self._grid_fw:
+        if firmware != self._grid_fw or connected != self._grid_connected:
             self._rebuild_grid(firmware)
         # Sync the force-firmware combo to the device's state WITHOUT re-firing its handler: index 0
         # ("Clear forced firmware") unless the firmware is currently forced.
